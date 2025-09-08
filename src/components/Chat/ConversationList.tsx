@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Search, Clock, User, Bot } from 'lucide-react';
+import { Search, Clock, User, Bot, Filter } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useSocket } from '../../contexts/SocketContext';
 import { Conversation } from '../../types';
 import { formatDistanceToNow } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -16,26 +17,53 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [loading, setLoading] = useState(true);
+  const { socket } = useSocket();
 
   useEffect(() => {
     fetchConversations();
     
-    // Subscribe to real-time updates
-    const subscription = supabase
-      .channel('conversations')
-      .on('postgres_changes', 
-        { event: '*', schema: 'public', table: 'conversations' },
-        () => {
-          fetchConversations();
-        }
-      )
+    // Subscribe to real-time updates via Supabase
+    const conversationSubscription = supabase
+      .channel('conversations_realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => {
+        fetchConversations();
+      })
       .subscribe();
 
+    const messageSubscription = supabase
+      .channel('messages_realtime')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
+        fetchConversations();
+      })
+      .subscribe();
+
+    // Subscribe to socket events
+    if (socket) {
+      socket.on('new_message', () => {
+        fetchConversations();
+      });
+
+      socket.on('conversation_closed', () => {
+        fetchConversations();
+      });
+
+      socket.on('operator_needed', () => {
+        fetchConversations();
+      });
+    }
+
     return () => {
-      subscription.unsubscribe();
+      conversationSubscription.unsubscribe();
+      messageSubscription.unsubscribe();
+      if (socket) {
+        socket.off('new_message');
+        socket.off('conversation_closed');
+        socket.off('operator_needed');
+      }
     };
-  }, []);
+  }, [socket]);
 
   const fetchConversations = async () => {
     try {
@@ -58,8 +86,9 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   };
 
   const filteredConversations = conversations.filter(conv =>
-    conv.client.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    conv.client.phone.includes(searchTerm)
+    (conv.client.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+     conv.client.phone.includes(searchTerm)) &&
+    (statusFilter === 'all' || conv.status === statusFilter)
   );
 
   const getStatusIcon = (conversation: Conversation) => {
@@ -100,7 +129,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Search */}
+      {/* Search and Filter */}
       <div className="p-4 border-b border-gray-700">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
@@ -111,6 +140,21 @@ export const ConversationList: React.FC<ConversationListProps> = ({
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-green-500"
           />
+        </div>
+        
+        {/* Status Filter */}
+        <div className="flex items-center space-x-2">
+          <Filter className="w-4 h-4 text-gray-400" />
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+          >
+            <option value="all">Todos los estados</option>
+            <option value="active">Activas</option>
+            <option value="waiting">Esperando operador</option>
+            <option value="closed">Cerradas</option>
+          </select>
         </div>
       </div>
 

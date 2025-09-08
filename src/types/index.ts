@@ -15,7 +15,7 @@ export interface Client {
   name: string | null;
   last_message: string | null;
   last_message_at: string;
-  status: 'bot' | 'operator' | 'closed';
+  status: 'initial' | 'choosing_type' | 'client_menu' | 'non_client_menu' | 'waiting_operator' | 'bot' | 'operator' | 'closed';
   assigned_operator_id: string | null;
 }
 
