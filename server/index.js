@@ -41,7 +41,7 @@ if (!fs.existsSync(authDir)) {
 }
 
 // Inactivity timeout (30 minutes)
-const INACTIVITY_TIMEOUT = 30 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 5 * 60 * 1000;
 const inactivityTimers = new Map();
 
 // Bot responses
@@ -121,6 +121,24 @@ const botResponses = {
            "Por favor elige una opción válida o escribe '0' para volver al menú principal."
 };
 
+function extractMessageText(msg) {
+  if (!msg.message) return '';
+
+  if (msg.message.conversation) {
+    return msg.message.conversation;
+  } else if (msg.message.extendedTextMessage?.text) {
+    return msg.message.extendedTextMessage.text;
+  } else if (msg.message.imageMessage?.caption) {
+    return msg.message.imageMessage.caption;
+  } else if (msg.message.videoMessage?.caption) {
+    return msg.message.videoMessage.caption;
+  } else if (msg.message.ephemeralMessage?.message) {
+    return extractMessageText({ message: msg.message.ephemeralMessage.message });
+  }
+
+  return '';
+}
+
 // Initialize WhatsApp connection
 async function connectToWhatsApp() {
   try {
@@ -132,19 +150,32 @@ async function connectToWhatsApp() {
       browser: ['IRU NET', 'Chrome', '1.0.0']
     });
 
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-      
-      if (qr) {
+
+sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
         console.log('QR Code generated');
-        qrCodeData = `data:image/png;base64,${qr}`;
-        io.emit('whatsapp_status', {
-          is_connected: false,
-          qr_code: qrCodeData,
-          phone_number: null,
-          last_connected: null
-        });
-      }
+        try {
+            // Convierte el texto del QR en una imagen en formato data URL (Base64)
+            const qrBase64 = await qrcode.toDataURL(qr);
+            
+            // Asigna la imagen Base64 a la variable global
+            qrCodeData = qrBase64; 
+
+            // Emite el estado con la imagen Base64 para el frontend
+            io.emit('whatsapp_status', {
+                is_connected: false,
+                qr_code: qrCodeData,
+                phone_number: null,
+                last_connected: null
+            });
+            console.log('QR Code sent to frontend successfully.');
+
+        } catch (err) {
+            console.error('Error generating QR code image:', err);
+        }
+    }
 
       if (connection === 'close') {
         const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -201,8 +232,8 @@ async function connectToWhatsApp() {
 // Handle incoming WhatsApp messages
 async function handleIncomingMessage(msg) {
   const phoneNumber = msg.key.remoteJid?.replace('@s.whatsapp.net', '');
-  const messageText = msg.message?.conversation || 
-                     msg.message?.extendedTextMessage?.text || '';
+ const messageText = extractMessageText(msg);
+
 
   if (!phoneNumber || !messageText) return;
 
@@ -224,7 +255,7 @@ async function handleIncomingMessage(msg) {
           name: null,
           last_message: messageText,
           last_message_at: new Date().toISOString(),
-          status: 'bot'
+          status: 'initial'
         }])
         .select()
         .single();
