@@ -1,11 +1,10 @@
-import QRCode from 'qrcode';
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('baileys');
-const qrcode = require('qrcode-terminal');
+const qrcode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config();
