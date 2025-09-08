@@ -1,9 +1,13 @@
+import QRCode from 'qrcode';
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
-const axios = require('axios');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('baileys');
+const qrcode = require('qrcode-terminal');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -15,6 +19,7 @@ const io = socketIo(server, {
   }
 });
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
@@ -24,115 +29,188 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Estado de WhatsApp (con Cloud API siempre está "conectado")
-let isConnected = true;
+// WhatsApp socket
+let sock = null;
+let qrCodeData = null;
+let isConnected = false;
 let phoneNumber = null;
+
+// Auth state directory
+const authDir = path.join(__dirname, 'auth_info');
+if (!fs.existsSync(authDir)) {
+  fs.mkdirSync(authDir);
+}
+
+// Inactivity timeout (30 minutes)
+const INACTIVITY_TIMEOUT = 30 * 60 * 1000;
+const inactivityTimers = new Map();
 
 // Bot responses
 const botResponses = {
-  welcome: "¡Hola! 👋 Bienvenido a IRU NET. Soy tu asistente virtual.\n\n" +
-           "Puedo ayudarte con:\n" +
-           "1️⃣ Información general\n" +
-           "2️⃣ Soporte técnico\n" +
-           "3️⃣ Hablar con un operador\n\n" +
-           "Escribe el número de la opción que necesitas:",
+  welcome: "¡Hola! 👋 Bienvenido a IRU NET.\n\n" +
+           "Para brindarte la mejor atención, necesito saber:\n\n" +
+           "1️⃣ SOY CLIENTE\n" +
+           "2️⃣ NO SOY CLIENTE\n\n" +
+           "Por favor responde con el número de tu opción:",
 
-  option1: "📋 **Información General**\n\n" +
-           "Somos IRU NET, tu solución en comunicaciones.\n" +
-           "Horario: Lunes a Viernes 9:00 - 18:00\n\n" +
-           "¿Te puedo ayudar con algo más?\n" +
-           "Escribe '0' para volver al menú principal o '3' para hablar con un operador.",
+  // Cliente responses
+  clientWelcome: "¡Estamos encantados de poder hablar contigo! 😊\n\n" +
+                 "Como cliente de IRU NET, puedo ayudarte con:\n\n" +
+                 "1️⃣ Información general\n" +
+                 "2️⃣ Reclamos\n" +
+                 "3️⃣ Hablar with un operador\n" +
+                 "4️⃣ Instructivo para pagar por la app IRUNET\n\n" +
+                 "Escribe el número de la opción que necesitas:",
 
-  option2: "🔧 **Soporte Técnico**\n\n" +
-           "Para soporte técnico especializado, te conectaré con uno de nuestros operadores.\n" +
-           "Un momento por favor...",
+  clientOption1: "📋 **Información General para Clientes**\n\n" +
+                 "• Horarios de atención: Lunes a Viernes 8:00 - 20:00, Sábados 8:00 - 14:00\n" +
+                 "• Soporte técnico 24/7\n" +
+                 "• Portal web: www.irunet.com\n" +
+                 "• App móvil disponible en Play Store y App Store\n\n" +
+                 "¿Necesitas algo más?\n" +
+                 "Escribe '0' para volver al menú o '3' para hablar con un operador.",
 
-  option3: "👨‍💼 **Conectando con operador**\n\n" +
-           "Te estoy conectando con uno de nuestros operadores humanos.\n" +
-           "Por favor espera un momento...",
+  clientOption2: "📞 **Reclamos**\n\n" +
+                 "Lamentamos cualquier inconveniente. Para procesar tu reclamo de manera eficiente, te conectaré con un operador especializado.\n\n" +
+                 "Un momento por favor...",
+
+  clientOption3: "👨‍💼 **Conectando con operador**\n\n" +
+                 "Te estoy conectando con uno de nuestros operadores especializados para clientes.\n" +
+                 "Por favor espera un momento...",
+
+  clientOption4: "💳 **Instructivo para Pagar por la App IRUNET**\n\n" +
+                 "📱 **Pasos para pagar:**\n" +
+                 "1. Abre la app IRUNET\n" +
+                 "2. Ve a 'Mi Cuenta' → 'Pagos'\n" +
+                 "3. Selecciona tu método de pago preferido\n" +
+                 "4. Confirma el monto y procesa el pago\n\n" +
+                 "💡 **Métodos disponibles:**\n" +
+                 "• Tarjeta de crédito/débito\n" +
+                 "• Transferencia bancaria\n" +
+                 "• Pago móvil\n\n" +
+                 "¿Necesitas ayuda adicional?\n" +
+                 "Escribe '0' para volver al menú o '3' para hablar con un operador.",
+
+  // No cliente responses
+  nonClientWelcome: "¡Gracias por tu interés en IRU NET! 🌐\n\n" +
+                    "Como futuro cliente, puedo ayudarte con:\n\n" +
+                    "1️⃣ Información general para nuevos clientes\n" +
+                    "2️⃣ Hablar con un operador\n\n" +
+                    "Escribe el número de la opción que necesitas:",
+
+  nonClientOption1: "🏢 **Información General para Nuevos Clientes**\n\n" +
+                    "📍 **Ubicación:**\n" +
+                    "Oficina principal: Av. Principal #123, Centro\n" +
+                    "Horarios: Lunes a Viernes 8:00 - 18:00\n\n" +
+                    "🏘️ **Barrios que abarcamos:**\n" +
+                    "• Centro, Norte, Sur\n" +
+                    "• Zona Industrial\n" +
+                    "• Urbanizaciones: Los Pinos, El Recreo, Vista Hermosa\n" +
+                    "• Sectores rurales cercanos\n\n" +
+                    "📋 **Requisitos para contratar:**\n" +
+                    "• Cédula de identidad\n" +
+                    "• Comprobante de domicilio\n" +
+                    "• Depósito de garantía\n\n" +
+                    "¿Te interesa conocer nuestros planes?\n" +
+                    "Escribe '2' para hablar con un operador o '0' para volver al menú.",
+
+  nonClientOption2: "👨‍💼 **Conectando con operador de ventas**\n\n" +
+                    "Te estoy conectando con uno de nuestros asesores comerciales.\n" +
+                    "Por favor espera un momento...",
 
   default: "❓ No entiendo tu mensaje.\n\n" +
-           "Por favor elige una opción:\n" +
-           "1️⃣ Información general\n" +
-           "2️⃣ Soporte técnico\n" +
-           "3️⃣ Hablar con un operador\n" +
-           "0️⃣ Volver al menú principal"
+           "Por favor elige una opción válida o escribe '0' para volver al menú principal."
 };
 
-// Función para enviar mensaje por Cloud API
-async function sendWhatsAppMessage(to, message) {
+// Initialize WhatsApp connection
+async function connectToWhatsApp() {
   try {
-    const url = `${process.env.WHATSAPP_API_URL}/${process.env.WHATSAPP_PHONE_ID}/messages`;
-    const response = await axios.post(
-      url,
-      {
-        messaging_product: "whatsapp",
-        to: to,
-        type: "text",
-        text: { body: message }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          "Content-Type": "application/json"
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+    
+    sock = makeWASocket({
+      auth: state,
+      printQRInTerminal: true,
+      browser: ['IRU NET', 'Chrome', '1.0.0']
+    });
+
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
+      
+      if (qr) {
+        console.log('QR Code generated');
+        qrCodeData = `data:image/png;base64,${qr}`;
+        io.emit('whatsapp_status', {
+          is_connected: false,
+          qr_code: qrCodeData,
+          phone_number: null,
+          last_connected: null
+        });
+      }
+
+      if (connection === 'close') {
+        const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
+        console.log('Connection closed due to', lastDisconnect?.error, ', reconnecting:', shouldReconnect);
+        
+        isConnected = false;
+        phoneNumber = null;
+        qrCodeData = null;
+        
+        io.emit('whatsapp_status', {
+          is_connected: false,
+          qr_code: null,
+          phone_number: null,
+          last_connected: null
+        });
+
+        if (shouldReconnect) {
+          setTimeout(connectToWhatsApp, 3000);
+        }
+      } else if (connection === 'open') {
+        console.log('WhatsApp connected successfully');
+        isConnected = true;
+        phoneNumber = sock.user?.id?.split(':')[0] || null;
+        qrCodeData = null;
+        
+        io.emit('whatsapp_status', {
+          is_connected: true,
+          qr_code: null,
+          phone_number: phoneNumber,
+          last_connected: new Date().toISOString()
+        });
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+    // Handle incoming messages
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
+      if (type === 'notify') {
+        for (const msg of messages) {
+          if (!msg.key.fromMe && msg.message) {
+            await handleIncomingMessage(msg);
+          }
         }
       }
-    );
-    return response.data;
+    });
+
   } catch (error) {
-    console.error("Error sending WhatsApp message:", error.response?.data || error.message);
-    throw error;
+    console.error('Error connecting to WhatsApp:', error);
+    setTimeout(connectToWhatsApp, 5000);
   }
 }
 
-// Webhook de verificación (Meta lo pide)
-app.get('/webhook/whatsapp', (req, res) => {
-  const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || "iru-net-verify";
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+// Handle incoming WhatsApp messages
+async function handleIncomingMessage(msg) {
+  const phoneNumber = msg.key.remoteJid?.replace('@s.whatsapp.net', '');
+  const messageText = msg.message?.conversation || 
+                     msg.message?.extendedTextMessage?.text || '';
 
-  if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-    console.log("Webhook verificado ✅");
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-// Webhook para recibir mensajes
-app.post('/webhook/whatsapp', async (req, res) => {
-  try {
-    const data = req.body;
-
-    if (data.object === "whatsapp_business_account") {
-      const entry = data.entry?.[0];
-      const changes = entry?.changes?.[0];
-      const messages = changes?.value?.messages;
-
-      if (messages && messages.length > 0) {
-        const msg = messages[0];
-        const from = msg.from; // número de teléfono del cliente
-        const text = msg.text?.body;
-
-        console.log(`📩 Mensaje entrante de ${from}: ${text}`);
-
-        await handleIncomingMessage(from, text);
-      }
-    }
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Error en webhook:", err.message);
-    res.sendStatus(500);
-  }
-});
-
-// Procesar mensaje entrante
-async function handleIncomingMessage(phoneNumber, messageText) {
   if (!phoneNumber || !messageText) return;
 
+  console.log(`Message from ${phoneNumber}: ${messageText}`);
+
   try {
-    // Buscar o crear cliente
+    // Find or create client
     let { data: client } = await supabase
       .from('clients')
       .select('*')
@@ -154,7 +232,7 @@ async function handleIncomingMessage(phoneNumber, messageText) {
       client = newClient;
     }
 
-    // Buscar o crear conversación
+    // Find or create conversation
     let { data: conversation } = await supabase
       .from('conversations')
       .select('*')
@@ -177,8 +255,8 @@ async function handleIncomingMessage(phoneNumber, messageText) {
       conversation = newConversation;
     }
 
-    // Guardar mensaje del cliente
-    await supabase
+    // Save message to database
+    const { data: savedMessage } = await supabase
       .from('messages')
       .insert([{
         conversation_id: conversation.id,
@@ -188,101 +266,342 @@ async function handleIncomingMessage(phoneNumber, messageText) {
         message_type: 'text',
         timestamp: new Date().toISOString(),
         is_read: false
-      }]);
+      }])
+      .select()
+      .single();
 
-    // Actualizar cliente
+    // Update client last message
     await supabase
       .from('clients')
-      .update({
+      .update({ 
         last_message: messageText,
         last_message_at: new Date().toISOString()
       })
       .eq('id', client.id);
 
-    // Procesar respuesta del bot
+    // Update conversation last message time
+    await supabase
+      .from('conversations')
+      .update({ last_message_at: new Date().toISOString() })
+      .eq('id', conversation.id);
+
+    // Reset inactivity timer
+    resetInactivityTimer(conversation.id);
+
+    // Process bot response if not assigned to operator
     if (!conversation.operator_id) {
       await processBotResponse(client, conversation, messageText);
     }
 
-    // Emitir a operadores conectados
+    // Emit real-time message to connected operators
     io.emit('new_message', {
+      ...savedMessage,
       conversation_id: conversation.id,
       client_phone: phoneNumber,
-      message: messageText
+      client_name: client.name
     });
 
   } catch (error) {
-    console.error('Error manejando mensaje:', error);
+    console.error('Error handling incoming message:', error);
   }
 }
 
-// Respuestas automáticas
+// Process bot responses with new flow
 async function processBotResponse(client, conversation, messageText) {
+  const normalizedMessage = messageText.toLowerCase().trim();
   let responseText = '';
   let shouldTransferToOperator = false;
 
-  const normalizedMessage = messageText.toLowerCase().trim();
+  // Expresiones regulares para detectar variantes
+  const isClientRegex = /(soy\s+cliente|1)/i;
+  const nonClientRegex = /(no\s+soy\s+cliente|2)/i;
 
-  if (normalizedMessage === '1') {
-    responseText = botResponses.option1;
-  } else if (normalizedMessage === '2' || normalizedMessage === '3') {
-    responseText = normalizedMessage === '2' ? botResponses.option2 : botResponses.option3;
-    shouldTransferToOperator = true;
-  } else if (normalizedMessage === '0') {
+  const clientState = client.status || 'initial';
+
+  // ---------- ESTADO INICIAL ----------
+  if (clientState === 'initial') {
     responseText = botResponses.welcome;
-  } else if (!client.last_message || client.status === 'bot') {
-    responseText = botResponses.welcome;
-  } else {
-    responseText = botResponses.default;
-  }
+    await updateClientStatus(client.id, 'choosing_type');
 
-  if (responseText) {
-    await sendWhatsAppMessage(client.phone, responseText);
+    if (sock && responseText) {
+      await sock.sendMessage(`${client.phone}@s.whatsapp.net`, { text: responseText });
 
-    await supabase
-      .from('messages')
-      .insert([{
+      // Guardar mensaje del bot en DB
+      const { data: botMessage } = await supabase
+        .from('messages')
+        .insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          sender_id: null,
+          content: responseText,
+          message_type: 'text',
+          timestamp: new Date().toISOString(),
+          is_read: true
+        }])
+        .select()
+        .single();
+
+      io.emit('new_message', {
+        ...botMessage,
         conversation_id: conversation.id,
-        sender_type: 'bot',
-        sender_id: null,
-        content: responseText,
-        message_type: 'text',
-        timestamp: new Date().toISOString(),
-        is_read: true
-      }]);
+        client_phone: client.phone,
+        client_name: client.name
+      });
+    }
+
+    return; // no procesamos la respuesta inicial todavía
   }
 
+  // ---------- ELECCIÓN TIPO CLIENTE ----------
+  if (clientState === 'choosing_type') {
+    if (isClientRegex.test(normalizedMessage)) {
+      responseText = botResponses.clientWelcome;
+      await updateClientStatus(client.id, 'client_menu');
+      await supabase.from('clients').update({ is_client: 1 }).eq('id', client.id);
+
+    } else if (nonClientRegex.test(normalizedMessage)) {
+      responseText = botResponses.nonClientWelcome;
+      await updateClientStatus(client.id, 'non_client_menu');
+      await supabase.from('clients').update({ is_client: 2 }).eq('id', client.id);
+
+    } else {
+      responseText = botResponses.default;
+    }
+  }
+
+  // ---------- MENÚ CLIENTE ----------
+  else if (clientState === 'client_menu') {
+    switch (normalizedMessage) {
+      case '1':
+        responseText = botResponses.clientOption1;
+        break;
+      case '2':
+        responseText = botResponses.clientOption2;
+        shouldTransferToOperator = true;
+        break;
+      case '3':
+        responseText = botResponses.clientOption3;
+        shouldTransferToOperator = true;
+        break;
+      case '4':
+        responseText = botResponses.clientOption4;
+        break;
+      case '0':
+        responseText = botResponses.welcome;
+        await updateClientStatus(client.id, 'choosing_type');
+        break;
+      default:
+        responseText = botResponses.default;
+    }
+  }
+
+  // ---------- MENÚ NO CLIENTE ----------
+  else if (clientState === 'non_client_menu') {
+    switch (normalizedMessage) {
+      case '1':
+        responseText = botResponses.nonClientOption1;
+        break;
+      case '2':
+        responseText = botResponses.nonClientOption2;
+        shouldTransferToOperator = true;
+        break;
+      case '0':
+        responseText = botResponses.welcome;
+        await updateClientStatus(client.id, 'choosing_type');
+        break;
+      default:
+        responseText = botResponses.default;
+    }
+  }
+
+  // ---------- RESPONDER Y GUARDAR MENSAJE ----------
+  if (sock && responseText) {
+    try {
+      await sock.sendMessage(`${client.phone}@s.whatsapp.net`, { text: responseText });
+
+      const { data: botMessage } = await supabase
+        .from('messages')
+        .insert([{
+          conversation_id: conversation.id,
+          sender_type: 'bot',
+          sender_id: null,
+          content: responseText,
+          message_type: 'text',
+          timestamp: new Date().toISOString(),
+          is_read: true
+        }])
+        .select()
+        .single();
+
+      io.emit('new_message', {
+        ...botMessage,
+        conversation_id: conversation.id,
+        client_phone: client.phone,
+        client_name: client.name
+      });
+
+    } catch (error) {
+      console.error('Error sending bot response:', error);
+    }
+  }
+
+  // ---------- TRANSFERIR A OPERADOR SI CORRESPONDE ----------
   if (shouldTransferToOperator) {
     await supabase
       .from('conversations')
-      .update({
-        status: 'waiting',
-        operator_id: null
-      })
+      .update({ status: 'waiting', operator_id: null })
       .eq('id', conversation.id);
 
-    await supabase
-      .from('clients')
-      .update({ status: 'operator' })
-      .eq('id', client.id);
+    await updateClientStatus(client.id, 'waiting_operator');
 
     io.emit('operator_needed', {
       conversation_id: conversation.id,
-      client_phone: client.phone
+      client_phone: client.phone,
+      client_name: client.name
     });
   }
 }
 
-// Socket.IO
-io.on('connection', (socket) => {
-  console.log('Cliente conectado:', socket.id);
 
+
+// Update client status
+async function updateClientStatus(clientId, status) {
+  await supabase
+    .from('clients')
+    .update({ status })
+    .eq('id', clientId);
+}
+
+// Inactivity timer management
+function resetInactivityTimer(conversationId) {
+  // Clear existing timer
+  if (inactivityTimers.has(conversationId)) {
+    clearTimeout(inactivityTimers.get(conversationId));
+  }
+
+  // Set new timer
+  const timer = setTimeout(async () => {
+    await closeConversationByInactivity(conversationId);
+  }, INACTIVITY_TIMEOUT);
+
+  inactivityTimers.set(conversationId, timer);
+}
+
+// Close conversation by inactivity
+async function closeConversationByInactivity(conversationId) {
+  try {
+    const { data: conversation } = await supabase
+      .from('conversations')
+      .select('*, client:clients(*)')
+      .eq('id', conversationId)
+      .single();
+
+    if (conversation && conversation.status === 'active') {
+      // Close conversation
+      await supabase
+        .from('conversations')
+        .update({ 
+          status: 'closed',
+          ended_at: new Date().toISOString()
+        })
+        .eq('id', conversationId);
+
+      // Update client status
+      await updateClientStatus(conversation.client.id, 'bot');
+
+      // Send closure message
+      if (sock && isConnected) {
+        const closureMessage = "⏰ Esta conversación ha sido cerrada por inactividad.\n\nSi necesitas ayuda nuevamente, envía cualquier mensaje para comenzar una nueva conversación.";
+        
+        await sock.sendMessage(`${conversation.client.phone}@s.whatsapp.net`, { 
+          text: closureMessage 
+        });
+
+        // Save closure message
+        await supabase
+          .from('messages')
+          .insert([{
+            conversation_id: conversationId,
+            sender_type: 'bot',
+            sender_id: null,
+            content: closureMessage,
+            message_type: 'text',
+            timestamp: new Date().toISOString(),
+            is_read: true
+          }]);
+      }
+
+      // Notify operators
+      io.emit('conversation_closed', {
+        conversation_id: conversationId,
+        reason: 'inactivity'
+      });
+
+      // Remove timer
+      inactivityTimers.delete(conversationId);
+    }
+  } catch (error) {
+    console.error('Error closing conversation by inactivity:', error);
+  }
+}
+
+// Send WhatsApp message
+async function sendWhatsAppMessage(to, message) {
+  if (!sock || !isConnected) {
+    throw new Error('WhatsApp not connected');
+  }
+
+  try {
+    const jid = `${to}@s.whatsapp.net`;
+    await sock.sendMessage(jid, { text: message });
+    return true;
+  } catch (error) {
+    console.error('Error sending WhatsApp message:', error);
+    throw error;
+  }
+}
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+
+  // Send current WhatsApp status
   socket.emit('whatsapp_status', {
     is_connected: isConnected,
+    qr_code: qrCodeData,
     phone_number: phoneNumber,
-    last_connected: new Date().toISOString()
+    last_connected: isConnected ? new Date().toISOString() : null
   });
 
+  // Handle WhatsApp connection request
+  socket.on('connect_whatsapp', () => {
+    if (!isConnected && !sock) {
+      connectToWhatsApp();
+    }
+  });
+
+  // Handle WhatsApp disconnection request
+  socket.on('disconnect_whatsapp', async () => {
+    if (sock) {
+      await sock.logout();
+      sock = null;
+      isConnected = false;
+      phoneNumber = null;
+      qrCodeData = null;
+    }
+  });
+
+  // Get WhatsApp status
+  socket.on('get_whatsapp_status', () => {
+    socket.emit('whatsapp_status', {
+      is_connected: isConnected,
+      qr_code: qrCodeData,
+      phone_number: phoneNumber,
+      last_connected: isConnected ? new Date().toISOString() : null
+    });
+  });
+
+  // Send WhatsApp message to any number
   socket.on('send_whatsapp_message', async (data) => {
     try {
       await sendWhatsAppMessage(data.to, data.message);
@@ -292,13 +611,84 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Close conversation manually
+  socket.on('close_conversation', async (data) => {
+    try {
+      const { conversationId, operatorId } = data;
+      
+      // Close conversation
+      await supabase
+        .from('conversations')
+        .update({ 
+          status: 'closed',
+          ended_at: new Date().toISOString()
+        })
+        .eq('id', conversationId);
+
+      // Get conversation details
+      const { data: conversation } = await supabase
+        .from('conversations')
+        .select('*, client:clients(*)')
+        .eq('id', conversationId)
+        .single();
+
+      if (conversation) {
+        // Update client status
+        await updateClientStatus(conversation.client.id, 'bot');
+
+        // Send closure message
+        if (sock && isConnected) {
+          const closureMessage = "✅ Esta conversación ha sido cerrada por nuestro operador.\n\nGracias por contactarnos. Si necesitas ayuda nuevamente, envía cualquier mensaje.";
+          
+          await sock.sendMessage(`${conversation.client.phone}@s.whatsapp.net`, { 
+            text: closureMessage 
+          });
+
+          // Save closure message
+          await supabase
+            .from('messages')
+            .insert([{
+              conversation_id: conversationId,
+              sender_type: 'bot',
+              sender_id: null,
+              content: closureMessage,
+              message_type: 'text',
+              timestamp: new Date().toISOString(),
+              is_read: true
+            }]);
+        }
+
+        // Clear inactivity timer
+        if (inactivityTimers.has(conversationId)) {
+          clearTimeout(inactivityTimers.get(conversationId));
+          inactivityTimers.delete(conversationId);
+        }
+
+        // Notify all operators
+        io.emit('conversation_closed', {
+          conversation_id: conversationId,
+          reason: 'manual',
+          operator_id: operatorId
+        });
+      }
+
+      socket.emit('conversation_closed_success', { conversationId });
+    } catch (error) {
+      console.error('Error closing conversation:', error);
+      socket.emit('conversation_closed_error', { error: error.message });
+    }
+  });
+
   socket.on('disconnect', () => {
-    console.log('Cliente desconectado:', socket.id);
+    console.log('Client disconnected:', socket.id);
   });
 });
 
 // Start server
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`IRU NET Server (Cloud API) corriendo en puerto ${PORT}`);
+  console.log(`IRU NET Server running on port ${PORT}`);
+  
+  // Auto-connect to WhatsApp on startup
+  setTimeout(connectToWhatsApp, 2000);
 });
