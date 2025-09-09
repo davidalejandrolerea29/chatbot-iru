@@ -8,11 +8,13 @@ import { es } from 'date-fns/locale';
 interface ConversationListProps {
   selectedConversationId: string | null;
   onSelectConversation: (conversation: Conversation) => void;
+  onConversationUpdate?: (conversation: Conversation) => void;
 }
 
 export const ConversationList: React.FC<ConversationListProps> = ({
   selectedConversationId,
   onSelectConversation,
+  onConversationUpdate,
 }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -67,24 +69,59 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
     // --- SUSCRIPCIÓN REALTIME CONVERSATIONS ---
     conversationChannel = supabase
-      .channel('realtime_conversations')
+      .channel('realtime_conversations_list')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'conversations' },
         async (payload) => {
-          const newConv = payload.new as Conversation;
+          console.log('Conversation update:', payload);
 
-          if (payload.type === 'INSERT') {
-            newConv.unread_count = 1;
-            setConversations((prev) => [newConv, ...prev]);
-          } else if (payload.type === 'UPDATE') {
-            newConv.unread_count = await getUnreadCount(newConv.id);
+          if (payload.eventType === 'INSERT') {
+            // Fetch complete conversation data with relations
+            const { data } = await supabase
+              .from('conversations')
+              .select(`
+                *,
+                client:clients(*),
+                assigned_operator:operators!conversations_operator_id_fkey(*),
+                closed_by_operator:operators!conversations_closed_by_fkey(*)
+              `)
+              .eq('id', payload.new.id)
+              .single();
+
+            if (data) {
+              const unreadCount = await getUnreadCount(data.id);
+              const newConv = { ...data, unread_count: unreadCount };
+              setConversations((prev) => [newConv, ...prev]);
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            // Fetch complete updated conversation data
+            const { data } = await supabase
+              .from('conversations')
+              .select(`
+                *,
+                client:clients(*),
+                assigned_operator:operators!conversations_operator_id_fkey(*),
+                closed_by_operator:operators!conversations_closed_by_fkey(*)
+              `)
+              .eq('id', payload.new.id)
+              .single();
+
+            if (data) {
+              const unreadCount = await getUnreadCount(data.id);
+              const updatedConv = { ...data, unread_count: unreadCount };
+              
+              setConversations((prev) => {
+                const updated = prev.map((c) => c.id === data.id ? updatedConv : c);
+                // Reordenar por last_message_at
+                return updated.sort((a, b) => 
+                  new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
+                );
+              });
+            }
+          } else if (payload.eventType === 'DELETE') {
             setConversations((prev) =>
-              prev.map((c) => (c.id === newConv.id ? newConv : c))
-            );
-          } else if (payload.type === 'DELETE') {
-            setConversations((prev) =>
-              prev.filter((c) => c.id !== (payload.old as Conversation).id)
+              prev.filter((c) => c.id !== payload.old.id)
             );
           }
         }
@@ -93,31 +130,72 @@ export const ConversationList: React.FC<ConversationListProps> = ({
 
     // --- SUSCRIPCIÓN REALTIME MESSAGES para actualizar unread_count ---
     messageChannel = supabase
-      .channel('realtime_messages')
+      .channel('realtime_messages_list')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'messages' },
-        (payload) => {
-          if (payload.type === 'INSERT') {
+        async (payload) => {
+          if (payload.eventType === 'INSERT') {
             const msg = payload.new as Message;
-            if (msg.sender_type !== 'operator') {
-              setConversations((prev) =>
-                prev.map((c) =>
-                  c.id === msg.conversation_id
-                    ? { ...c, unread_count: (c.unread_count || 0) + 1 }
-                    : c
-                )
+            console.log('New message:', msg);
+            
+            // Actualizar unread count y last_message_at
+            setConversations((prev) => {
+              const updated = prev.map((c) => {
+                if (c.id === msg.conversation_id) {
+                  return {
+                    ...c,
+                    last_message_at: msg.timestamp,
+                    unread_count: msg.sender_type !== 'operator' 
+                      ? (c.unread_count || 0) + 1 
+                      : c.unread_count || 0
+                  };
+                }
+                return c;
+              });
+              
+              // Reordenar por last_message_at
+              return updated.sort((a, b) => 
+                new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
               );
-            }
+            });
           }
         }
       )
       .subscribe();
 
     return () => {
-      conversationChannel.unsubscribe();
-      messageChannel.unsubscribe();
+      if (conversationChannel) supabase.removeChannel(conversationChannel);
+      if (messageChannel) supabase.removeChannel(messageChannel);
     };
+  }, []);
+
+  // Marcar mensajes como leídos cuando se selecciona una conversación
+  useEffect(() => {
+    const markAsRead = async () => {
+      if (selectedConversationId) {
+        try {
+          await supabase
+            .from('messages')
+            .update({ is_read: true })
+            .eq('conversation_id', selectedConversationId)
+            .neq('sender_type', 'operator');
+
+          // Actualizar el unread_count local
+          setConversations(prev => 
+            prev.map(c => 
+              c.id === selectedConversationId 
+                ? { ...c, unread_count: 0 }
+                : c
+            )
+          );
+        } catch (error) {
+          console.error('Error marking messages as read:', error);
+        }
+      }
+    };
+
+    markAsRead();
   }, [selectedConversationId]);
 
   const filteredConversations = conversations.filter(
@@ -238,7 +316,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
                       <p className="text-sm text-gray-400">{conversation.client?.phone}</p>
                     </div>
                   </div>
-                  {conversation.unread_count > 0 && (
+                  {(conversation.unread_count || 0) > 0 && (
                     <div className="bg-green-600 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
                       {conversation.unread_count}
                     </div>
