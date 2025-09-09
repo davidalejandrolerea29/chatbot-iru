@@ -270,14 +270,34 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
 
-  // --- Cerrar conversación ---
 const closeConversation = async () => {
   if (!conversation || !operator) return;
   if (!window.confirm('¿Cerrar conversación?')) return;
-  
   try {
-    // 1. Actualizar estado de la conversación
-    const { error: convError } = await supabase
+    // 1. Insertar mensaje de cierre
+    const cierreMsg = {
+      conversation_id: conversation.id,
+      sender_type: 'operator' as const,
+      sender_id: operator.id,
+      content: 'Chat cerrado, muchas gracias por comunicarte 🙏',
+      message_type: 'text' as const,
+      timestamp: new Date().toISOString(),
+      is_read: false,
+    };
+
+    const { error: msgError } = await supabase.from('messages').insert([cierreMsg]);
+    if (msgError) throw msgError;
+
+    // Enviar también por WhatsApp si corresponde
+    socket?.emit('send_whatsapp_message', {
+      to: client.phone,
+      message: cierreMsg.content,
+      conversation_id: conversation.id,
+      operator_id: operator.id,
+    });
+
+    // 2. Cerrar la conversación
+    const { error } = await supabase
       .from('conversations')
       .update({
         status: 'closed',
@@ -286,34 +306,9 @@ const closeConversation = async () => {
       })
       .eq('id', conversation.id);
 
-    if (convError) throw convError;
+    if (error) throw error;
 
-    // 2. Insertar mensaje de sistema
-    const systemMessage = {
-      conversation_id: conversation.id,
-      sender_type: 'system' as const, // Nuevo tipo: "system"
-      sender_id: operator.id,        // opcional, puede ser null
-      content: 'El chat ha sido cerrado por el operador.',
-      message_type: 'system' as const,
-      timestamp: new Date().toISOString(),
-      is_read: true,
-    };
-
-    const { error: msgError } = await supabase
-      .from('messages')
-      .insert([systemMessage]);
-
-    if (msgError) throw msgError;
-
-    // 3. Emitir también a WhatsApp si querés notificar al cliente
-    socket?.emit('send_whatsapp_message', {
-      to: client.phone,
-      message: 'La conversación ha sido cerrada. ¡Gracias por comunicarte!',
-      conversation_id: conversation.id,
-      operator_id: operator.id,
-    });
-
-    // El estado se actualizará automáticamente via realtime
+    // El realtime actualizará el estado local automáticamente
   } catch (err) {
     console.error(err);
     toast.error('Error al cerrar conversación');
