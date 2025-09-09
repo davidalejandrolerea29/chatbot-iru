@@ -43,33 +43,85 @@ if (!fs.existsSync(authDir)) {
 // Bot responses
 const botResponses = {
   welcome: "¡Hola! 👋 Bienvenido a IRU NET. Soy tu asistente virtual.\n\n" +
-           "Puedo ayudarte con:\n" +
-           "1️⃣ Información general\n" +
-           "2️⃣ Soporte técnico\n" +
-           "3️⃣ Hablar con un operador\n\n" +
-           "Escribe el número de la opción que necesitas:",
-  
-  option1: "📋 **Información General**\n\n" +
-           "Somos IRU NET, tu solución en comunicaciones.\n" +
-           "Horario: Lunes a Viernes 9:00 - 18:00\n\n" +
-           "¿Te puedo ayudar con algo más?\n" +
-           "Escribe '0' para volver al menú principal o '3' para hablar con un operador.",
-  
-  option2: "🔧 **Soporte Técnico**\n\n" +
-           "Para soporte técnico especializado, te conectaré con uno de nuestros operadores.\n" +
-           "Un momento por favor...",
-  
-  option3: "👨‍💼 **Conectando con operador**\n\n" +
-           "Te estoy conectando con uno de nuestros operadores humanos.\n" +
-           "Por favor espera un momento...",
-  
+           "Para brindarte la mejor atención, necesito saber:\n\n" +
+           "1️⃣ SOY CLIENTE\n" +
+           "2️⃣ NO SOY CLIENTE\n\n" +
+           "Escribe el número de la opción que corresponde:",
+
+  // Menú para clientes existentes
+  clientMenu: "¡Estamos encantados de poder hablar contigo! 😊\n\n" +
+              "Como cliente de IRU NET, puedo ayudarte con:\n\n" +
+              "1️⃣ Información general\n" +
+              "2️⃣ Reclamos\n" +
+              "3️⃣ Hablar con un operador\n" +
+              "4️⃣ Instructivo para pagar por la app IRUNET\n\n" +
+              "Escribe el número de la opción que necesitas:",
+
+  // Opciones para clientes
+  clientOption1: "📋 **Información General - Clientes**\n\n" +
+                 "Como cliente de IRU NET tienes acceso a:\n" +
+                 "• Soporte técnico 24/7\n" +
+                 "• App IRUNET para gestionar tu cuenta\n" +
+                 "• Múltiples formas de pago\n" +
+                 "• Atención personalizada\n\n" +
+                 "Horario de atención: Lunes a Viernes 9:00 - 18:00\n\n" +
+                 "¿Te puedo ayudar con algo más?\n" +
+                 "Escribe '0' para volver al menú principal o '3' para hablar con un operador.",
+
+  clientOption2: "📞 **Reclamos**\n\n" +
+                 "Lamento que tengas un inconveniente. Te conectaré inmediatamente con uno de nuestros operadores especializados en reclamos.\n\n" +
+                 "Un momento por favor...",
+
+  clientOption3: "👨‍💼 **Conectando con operador**\n\n" +
+                 "Te estoy conectando con uno de nuestros operadores.\n" +
+                 "Por favor espera un momento...",
+
+  clientOption4: "📱 **Instructivo App IRUNET**\n\n" +
+                 "Para pagar a través de nuestra app:\n\n" +
+                 "1️⃣ Descarga la app 'IRUNET' desde Play Store o App Store\n" +
+                 "2️⃣ Ingresa con tu número de cliente\n" +
+                 "3️⃣ Ve a la sección 'Pagos'\n" +
+                 "4️⃣ Selecciona el método de pago (tarjeta, transferencia, etc.)\n" +
+                 "5️⃣ Confirma el pago\n\n" +
+                 "¿Necesitas ayuda con algún paso específico?\n" +
+                 "Escribe '0' para volver al menú o '3' para hablar con un operador.",
+
+  // Menú para no clientes
+  nonClientMenu: "¡Gracias por tu interés en IRU NET! 🌐\n\n" +
+                 "Como futuro cliente, puedo ayudarte con:\n\n" +
+                 "1️⃣ Información general\n" +
+                 "2️⃣ Hablar con un operador\n\n" +
+                 "Escribe el número de la opción que necesitas:",
+
+  // Opciones para no clientes
+  nonClientOption1: "📍 **Información General - Nuevos Clientes**\n\n" +
+                    "**🏢 Ubicación:**\n" +
+                    "Nos encontramos en [Dirección de IRU NET]\n\n" +
+                    "**🏘️ Barrios que abarcamos:**\n" +
+                    "• Centro\n" +
+                    "• Barrio Norte\n" +
+                    "• Villa Nueva\n" +
+                    "• San Martín\n" +
+                    "• [Otros barrios]\n\n" +
+                    "**📋 Requisitos para ser cliente:**\n" +
+                    "• DNI del titular\n" +
+                    "• Comprobante de domicilio\n" +
+                    "• Depósito de garantía\n\n" +
+                    "¿Te interesa contratar nuestros servicios?\n" +
+                    "Escribe '2' para hablar con un operador o '0' para volver al menú principal.",
+
+  nonClientOption2: "👨‍💼 **Conectando con operador de ventas**\n\n" +
+                    "Te estoy conectando con uno de nuestros asesores comerciales.\n" +
+                    "Podrán brindarte información detallada sobre nuestros planes y servicios.\n\n" +
+                    "Por favor espera un momento...",
+
   default: "❓ No entiendo tu mensaje.\n\n" +
-           "Por favor elige una opción:\n" +
-           "1️⃣ Información general\n" +
-           "2️⃣ Soporte técnico\n" +
-           "3️⃣ Hablar con un operador\n" +
-           "0️⃣ Volver al menú principal"
+           "Por favor elige una opción válida escribiendo el número correspondiente.\n\n" +
+           "Escribe '0' para volver al menú principal."
 };
+
+// User session states
+const userSessions = new Map();
 
 // Initialize WhatsApp connection
 async function connectToWhatsApp() {
@@ -82,32 +134,27 @@ async function connectToWhatsApp() {
       browser: ['IRU NET', 'Chrome', '1.0.0']
     });
 
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
+      if (qr) {
         console.log('QR Code generated');
         try {
-            // Convierte el texto del QR en una imagen en formato data URL (Base64)
-            const qrBase64 = await qrcode.toDataURL(qr);
-            
-            // Asigna la imagen Base64 a la variable global
-            qrCodeData = qrBase64; 
+          const qrBase64 = await qrcode.toDataURL(qr);
+          qrCodeData = qrBase64; 
 
-            // Emite el estado con la imagen Base64 para el frontend
-            io.emit('whatsapp_status', {
-                is_connected: false,
-                qr_code: qrCodeData,
-                phone_number: null,
-                last_connected: null
-            });
-            console.log('QR Code sent to frontend successfully.');
+          io.emit('whatsapp_status', {
+            is_connected: false,
+            qr_code: qrCodeData,
+            phone_number: null,
+            last_connected: null
+          });
+          console.log('QR Code sent to frontend successfully.');
 
         } catch (err) {
-            console.error('Error generating QR code image:', err);
+          console.error('Error generating QR code image:', err);
         }
-    }
+      }
 
       if (connection === 'close') {
         const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -241,7 +288,7 @@ async function handleIncomingMessage(msg) {
 
     // Process bot response if not assigned to operator
     if (!conversation.operator_id) {
-      await processBotResponse(client, conversation, messageText);
+      await processBotResponse(client, conversation, messageText, phoneNumber);
     }
 
     // Emit to connected operators
@@ -257,26 +304,104 @@ async function handleIncomingMessage(msg) {
 }
 
 // Process bot responses
-async function processBotResponse(client, conversation, messageText) {
+async function processBotResponse(client, conversation, messageText, phoneNumber) {
   let responseText = '';
   let shouldTransferToOperator = false;
 
   const normalizedMessage = messageText.toLowerCase().trim();
+  
+  // Get or initialize user session
+  let userSession = userSessions.get(phoneNumber) || { state: 'welcome', clientType: null };
 
-  // Check for specific responses
-  if (normalizedMessage === '1') {
-    responseText = botResponses.option1;
-  } else if (normalizedMessage === '2' || normalizedMessage === '3') {
-    responseText = normalizedMessage === '2' ? botResponses.option2 : botResponses.option3;
-    shouldTransferToOperator = true;
-  } else if (normalizedMessage === '0') {
-    responseText = botResponses.welcome;
-  } else if (!client.last_message || client.status === 'bot') {
-    // First message or returning to bot
-    responseText = botResponses.welcome;
-  } else {
-    responseText = botResponses.default;
+  // Handle different states
+  switch (userSession.state) {
+    case 'welcome':
+      if (normalizedMessage === '1') {
+        // SOY CLIENTE
+        userSession.clientType = 'client';
+        userSession.state = 'client_menu';
+        responseText = botResponses.clientMenu;
+      } else if (normalizedMessage === '2') {
+        // NO SOY CLIENTE
+        userSession.clientType = 'non_client';
+        userSession.state = 'non_client_menu';
+        responseText = botResponses.nonClientMenu;
+      } else if (normalizedMessage === '0') {
+        responseText = botResponses.welcome;
+      } else {
+        responseText = botResponses.welcome;
+      }
+      break;
+
+    case 'client_menu':
+      if (normalizedMessage === '1') {
+        responseText = botResponses.clientOption1;
+        userSession.state = 'client_option1';
+      } else if (normalizedMessage === '2') {
+        responseText = botResponses.clientOption2;
+        shouldTransferToOperator = true;
+      } else if (normalizedMessage === '3') {
+        responseText = botResponses.clientOption3;
+        shouldTransferToOperator = true;
+      } else if (normalizedMessage === '4') {
+        responseText = botResponses.clientOption4;
+        userSession.state = 'client_option4';
+      } else if (normalizedMessage === '0') {
+        userSession.state = 'welcome';
+        responseText = botResponses.welcome;
+      } else {
+        responseText = botResponses.default + "\n\n" + botResponses.clientMenu;
+      }
+      break;
+
+    case 'non_client_menu':
+      if (normalizedMessage === '1') {
+        responseText = botResponses.nonClientOption1;
+        userSession.state = 'non_client_option1';
+      } else if (normalizedMessage === '2') {
+        responseText = botResponses.nonClientOption2;
+        shouldTransferToOperator = true;
+      } else if (normalizedMessage === '0') {
+        userSession.state = 'welcome';
+        responseText = botResponses.welcome;
+      } else {
+        responseText = botResponses.default + "\n\n" + botResponses.nonClientMenu;
+      }
+      break;
+
+    case 'client_option1':
+    case 'client_option4':
+      if (normalizedMessage === '0') {
+        userSession.state = 'welcome';
+        responseText = botResponses.welcome;
+      } else if (normalizedMessage === '3') {
+        responseText = botResponses.clientOption3;
+        shouldTransferToOperator = true;
+      } else {
+        responseText = botResponses.default + "\n\nEscribe '0' para volver al menú principal o '3' para hablar con un operador.";
+      }
+      break;
+
+    case 'non_client_option1':
+      if (normalizedMessage === '0') {
+        userSession.state = 'welcome';
+        responseText = botResponses.welcome;
+      } else if (normalizedMessage === '2') {
+        responseText = botResponses.nonClientOption2;
+        shouldTransferToOperator = true;
+      } else {
+        responseText = botResponses.default + "\n\nEscribe '2' para hablar con un operador o '0' para volver al menú principal.";
+      }
+      break;
+
+    default:
+      userSession.state = 'welcome';
+      responseText = botResponses.welcome;
+      break;
   }
+
+  // Update user session
+  userSessions.set(phoneNumber, userSession);
 
   // Send bot response
   if (sock && responseText) {
@@ -316,10 +441,14 @@ async function processBotResponse(client, conversation, messageText) {
       .update({ status: 'operator' })
       .eq('id', client.id);
 
+    // Clear user session when transferring to operator
+    userSessions.delete(phoneNumber);
+
     // Notify operators
     io.emit('operator_needed', {
       conversation_id: conversation.id,
-      client_phone: client.phone
+      client_phone: client.phone,
+      client_type: userSession.clientType
     });
   }
 }
