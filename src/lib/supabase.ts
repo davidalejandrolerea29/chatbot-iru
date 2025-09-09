@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-
+import type { Client, Conversation, Message, Operator } from '../types';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -29,5 +29,7 @@ export const signUp = async (email: string, password: string, name: string, phon
 
 export const signOut = async () => {
   const { error } = await supabase.auth.signOut();
+  
   return { error };
 };
+export type { Client, Conversation, Message, Operator };
