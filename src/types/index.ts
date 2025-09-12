@@ -49,6 +49,7 @@ export interface Operator {
   last_activity?: string;
   created_at: string;
   updated_at: string;
+  is_online: boolean
 }
 
 export interface WhatsAppStatus {

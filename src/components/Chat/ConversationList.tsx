@@ -253,7 +253,7 @@ export const ConversationList: React.FC<ConversationListProps> = ({
   }
 
   return (
-    <div className="flex flex-col h-full bg-gray-900">
+    <div className="flex flex-col h-full bg-white-900">
       {/* Search and Filter */}
       <div className="p-4 border-b border-gray-700">
         <div className="relative mb-3">

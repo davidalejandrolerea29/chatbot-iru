@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import { SocketProvider } from './contexts/SocketContext';
 import { LoginForm } from './components/Auth/LoginForm';
 import { RegisterForm } from './components/Auth/RegisterForm';
@@ -52,7 +53,9 @@ const AppContent: React.FC = () => {
 
   return (
     <SocketProvider>
-      <div className="flex h-screen bg-gray-900">
+      <div className={`flex h-screen transition-colors ${
+        document.documentElement.classList.contains('dark') ? 'bg-gray-900' : 'bg-gray-50'
+      }`}>
         <Sidebar activeView={activeView} onViewChange={setActiveView} />
         <main className="flex-1 overflow-hidden">
           {renderView()}
@@ -64,19 +67,21 @@ const AppContent: React.FC = () => {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-      <Toaster 
-        position="top-right"
-        toastOptions={{
-          duration: 4000,
-          style: {
-            background: '#374151',
-            color: '#fff',
-          },
-        }}
-      />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppContent />
+        <Toaster 
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: '#374151',
+              color: '#fff',
+            },
+          }}
+        />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 
